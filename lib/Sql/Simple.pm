@@ -138,11 +138,38 @@ This module will "auto-magically" figure out if your argument stream contains mu
 
 (hmm, maybe I should have named this thing Sql::KindaSimple)
 
+=head1 Logical operators
+
+To retouch on the above, if you needed to do something like the following..
+
+  SELECT fruit FROM produce WHERE price > 10
+
+The "logical operator" syntax (anything besides the basic "=" operator is executed by the following)..
+
+  Sql::Simple->query('fruit', 'produce', { 
+    'price' => { 
+      'op' => '>', 
+      'val' => 10 
+     } 
+  } );
+
+To do a "between" query simply execute the follwing.
+
+  Sql::Simple->query('fruit', 'produce', { 
+    'price' => { 
+      'op' => 'between', 
+      'val' => 10,
+      'val2' => 20
+     } 
+  } );
+
 =head1 Variables
 
 $DBH - (the database handle to use) You can modify this directly, or for your convenience you may call this helper method
 
   Sql::Simple->setdbh($dbh);
+
+$RETURNSTH - (if "true" it returns the statement handle, and the map)
 
 $RETURNSQL - (if "true" just return the SQL statement generated, don't actually execute it) Or use the following.
 
@@ -160,7 +187,7 @@ B<If you do not set this, this module will expect the first argument to each fun
 
 package Sql::Simple;
 use vars qw($version $DBH $RETURNSQL @EXPORT @EXPORT_OK $DEBUGSQL);
-$VERSION = "0.03";
+$VERSION = "0.04";
 use strict;
 use Data::Dumper;
 use Carp qw(cluck croak);
@@ -374,10 +401,11 @@ sub update {
 
   die("multiple set clause set with one where clause, that makes no sense...") if ( ! $singleset && $singlewhere );
 
-  my $sql = "UPDATE $table SET ";
-  $sql = &_clause($sql, $set->[0]);
-  $sql =~ s/ AND /\, /g;
   my $map = [];
+  my $sql = "UPDATE $table SET ";
+  $sql = &_clause($sql, $set->[0], $map);
+  my $where_map_start = $#{$map};
+  $sql =~ s/ AND /\, /g;
 
   if ( $where ) {
     $sql .= "WHERE\n";
@@ -416,21 +444,22 @@ sub update {
     };
     die(&cluck() . "\n" . $@) if ( $@ );
   } else {
-    eval {
+    # offset for where clause in the map
+    #eval {
       if ( $singleset ) {
-	my @set = map { $set->[0]{$_} } sort(keys(%{$set->[0]}));
+	#my @set = map { $set->[0]{$_} } sort(keys(%{$set->[0]}));
         foreach my $c ( 0..$#{$where} ) {
-	  $sth->execute( @set, (&_value($where->[$c], $map)) );
-	  #print Dumper( @set, (&_value($where->[$c], $map)) );
+	  $sth->execute( (&_value($set->[0], $map)), (&_value($where->[$c], $map, \$where_map_start)) );
+	  #print Dumper( (&_value($set->[0], $map)), (&_value($where->[$c], $map, \$where_map_start)) );
         }
       } else {
         foreach my $c ( 0..$#{$where} ) {
-	  $sth->execute( (map { $set->[$c]{$_} } sort(keys(%{$set->[$c]}))), (&_value($where->[$c], $map)) );
-	  #print Dumper( (map { $set->[$c]{$_} } sort(keys(%{$set->[$c]}))), (&_value($where->[$c], $map) ) );
+	  $sth->execute( (&_value($set->[0], $map)), (&_value($where->[$c], $map, \$where_map_start)) );
+	  #print Dumper( (&_value($set->[$c], $map)), (&_value($where->[$c], $map, \$where_map_start)) );
         }
       }
-    };
-    die(&cluck() . "\n" . $@) if ( $@ );
+      #};
+      #die(&cluck() . "\n" . $@) if ( $@ );
   }
   $sth->finish(); 
   $dbh->commit() unless ( $dbh->{'AutoCommit'} );
@@ -823,7 +852,7 @@ sub query {
   map { $simple++ if ( $_ ne 'VALUE' ) } @{$map};
   if ( $simple == 0 ) {
     eval {
-      $sth->execute( (keys(%{$where})) );
+      $sth->execute( map { $where->{$_} } sort(keys(%{$where})) );
     };
   } else {
     eval {
@@ -852,7 +881,15 @@ sub query {
 }
 
 sub execute {
-  my ( $class, $dbh, $sql, $struct, $col ) = @_;
+  my $class = shift;
+  my $dbh;
+
+  if ( ref($_[0]) eq 'DBI::db' ) {
+    $dbh = shift;
+  } else {
+    $dbh = $DBH;
+  }
+  my ( $sql, $struct, $col ) = @_;
 
   my $sth = $dbh->prepare($sql);
   if ( $sql =~ /select/i ) {
@@ -1008,6 +1045,9 @@ sub _clause {
 	  # bloody hack.. I need to be able to throw an = sign if there is whitespace ie: IS NULL (vs. a scalar ref table join)
 	  ${$sql} .= $w . ( ( ${$where->{$w}} =~ /\s/ ) ? ' ' : ' = ' ) . ${$where->{$w}} . ' AND ';
 	  push(@{$map}, 'SCALAR');
+	} elsif ( defined($where->{$w}{'val2'}) ) {
+	  ${$sql} .= $w . ' ' . $where->{$w}{'op'} . ' ? AND ? AND ';
+	  push(@{$map}, 'VAL2');
 	} else {
 	  ${$sql} .= $w . ' ' . $where->{$w}{'op'} . ' ? AND ';
 	  push(@{$map}, 'VAL');
@@ -1064,6 +1104,8 @@ sub _value {
 	$value->{$_};
       } elsif ( $map->[${$c}] eq 'ARRAY' ) {
 	@{$value->{$_}};
+      } elsif ( $map->[${$c}] eq 'VAL2' ) {
+	( $value->{$_}{'val'}, $value->{$_}{'val2'} );
       } elsif ( $map->[${$c}] eq 'VAL' ) {
 	$value->{$_}{'val'};
       } elsif ( $map->[${$c}] eq 'SCALAR' ) {
@@ -1089,6 +1131,12 @@ sub _value {
 sub setdbh {
   my $class = shift;
   $DBH = shift;
+}
+
+####
+# return the dbh
+sub getdbh {
+  return $DBH;
 }
 
 ####
@@ -1171,5 +1219,10 @@ The Sql::Simple module is Copyright (c) 2004 Ryan Alan Dietrich. The Sql::Simple
 =head1 AUTHOR:
 
 Sql::Simple by Ryan Alan Dietrich <ryan@dietrich.net>
+
+Contributions (thanks!) from the following.
+
+Mark Stosberg
+Miguel Manso
 
 =cut
