@@ -2,3 +2,4 @@
 0.02 (Rewrite of join syntax, cleaned up documentation)
 0.03 (modified documentation, cleaned up minor non-fatal syntax)
 0.04 (added between, fixed query execution logic, adjusted documentation for logical operators)
+0.05 (insert now allows function calls as values, generic cleanup)

@@ -171,6 +171,9 @@ $DBH - (the database handle to use) You can modify this directly, or for your co
 
 $RETURNSTH - (if "true" it returns the statement handle, and the map)
 
+  Sql::Simple->returnsth(1); # returns a statement handle for the generated sql statement
+  Sql::Simple->returnsth(0); # default (execute)
+
 $RETURNSQL - (if "true" just return the SQL statement generated, don't actually execute it) Or use the following.
 
   Sql::Simple->setreturn(1); # for "return"
@@ -186,15 +189,15 @@ B<If you do not set this, this module will expect the first argument to each fun
 =cut
 
 package Sql::Simple;
-use vars qw($version $DBH $RETURNSQL @EXPORT @EXPORT_OK $DEBUGSQL);
-$VERSION = "0.04";
+use vars qw($version $DBH $RETURNSQL @EXPORT @EXPORT_OK $DEBUGSQL $RETURNSTH);
+$VERSION = "0.05";
 use strict;
 use Data::Dumper;
 use Carp qw(cluck croak);
 
 use Exporter;
-@EXPORT = qw($DBH $RETURNSQL $DEBUGSQL);
-@EXPORT_OK = qw($DBH $RETURNSQL $DEBUGSQL);
+@EXPORT = qw($DBH $RETURNSQL $DEBUGSQL $RETURNSTH);
+@EXPORT_OK = qw($DBH $RETURNSQL $DEBUGSQL $RETURNSTH);
 
 =head1 Sql::Simple->delete
 
@@ -411,6 +414,7 @@ sub update {
     $sql .= "WHERE\n";
     $sql = &_clause($sql, $where->[0], $map);
   } else {
+    return $sql if ( $RETURNSQL );
     $sth = $dbh->prepare($sql);
     $sth->execute( map { $set->[0]{$_} } sort(keys(%{$set->[0]})) );
     $sth->finish();
@@ -554,6 +558,7 @@ sub insert {
     $columns = [ sort(keys(%{$temp})) ];
   }
 
+  my $simpleCheck;
   my $map = [];
   my $sql = "INSERT INTO $table\n( " . join(', ', @{$columns}) . " )\n";
   if ( ref($values) eq 'ARRAY' ) {
@@ -565,10 +570,25 @@ sub insert {
         ( $tsql, $map ) = Sql::Simple->query(undef, %{$values->[0]});
         $sql .= "( $tsql)";
       } else {
-        $sql .= "VALUES\n( " . join(', ', ('?') x scalar(@{$columns}) ) . ' )';
+        # not simple if there are any values that are scalar references.. 
+	$simpleCheck = grep { 1 if ( ref($_) eq 'SCALAR' ) } @{$values};
+	# if it's a hash, see if any of it's memebers are scalars
+	$simpleCheck += grep { 1 if ( ref($values->[0]{$_}) eq 'SCALAR' ) } keys(%{$values->[0]}) if ( ref($values->[0]) eq 'HASH' );
+
+	if ( $simpleCheck ) {
+	  $sql .= &_insert($values->[0], $map);
+	} else {
+          $sql .= "VALUES\n( " . join(', ', ('?') x scalar(@{$columns}) ) . ' )';
+	}
       }	
     } else {
-      $sql .= "VALUES\n( " . join(', ', ('?') x scalar(@{$columns}) ) . ' )';
+      # not simple if there are any values that are scalar references.. 
+      $simpleCheck = grep { 1 if ( ref($_) && ref($_) ne 'ARRAY' ) } @{$values};
+      if ( $simpleCheck ) {
+        $sql .= &_insert($values, $map);
+      } else {
+        $sql .= "VALUES\n( " . join(', ', ('?') x scalar(@{$columns}) ) . ' )';
+      }
     }
   } elsif ( ref($values) eq 'HASH' ) {
     if ( $values->{'table'} ) {
@@ -585,8 +605,18 @@ sub insert {
 
   my $sth = $dbh->prepare($sql);
   if ( ref($map) eq 'ARRAY' && scalar(@{$map}) ) {
-    foreach my $v ( @{$values} ) {
-      $sth->execute( &_value($v->{'where'}, $map));
+    if ( ref($values->[0]) eq 'HASH' ) {
+      if ( defined($values->[0]{'where'}) ) {
+        foreach my $v ( @{$values} ) {
+          $sth->execute( &_value($v->{'where'}, $map));
+        }
+      } else {
+        foreach my $v ( @{$values} ) {
+          $sth->execute( &_value($v, $map) );
+        }
+      }
+    } else {
+      $sth->execute( &_value($values, $map));
     }
   } else {
     # hmm. see if we have a single array, or an array of arrays
@@ -772,7 +802,6 @@ sub query {
   } else {
     $dbh = $DBH;
   }
-  croak("No database handle given!") if ( ! $RETURNSQL && ! ref($dbh) );
 
   # pass in arguments, or a hash.. we'll take care of the rest! (umm, I hope! ;-)
   if ( grep { 1 if ( $_ eq 'table' ) } @_ ) {
@@ -786,6 +815,9 @@ sub query {
   } else {
     ( $columns, $table, $where, $col, $return, $order ) = @_;
   }
+  $return = 0 unless ( defined($return) );
+
+  croak("No database handle given!") if ( ! $RETURNSQL && ! ref($dbh) && ! $return );
 
   my $sql = "SELECT ";
   my $map = [];
@@ -920,6 +952,35 @@ sub execute {
 
 #######################################################################
 # internal functions
+
+sub _insert {
+  my ( $values, $map ) = @_;
+
+  my $sql .= "VALUES\n( ";
+  if ( ref($values) eq 'ARRAY' ) {
+    foreach my $c ( @{$values} ) {
+      if ( ref($c) ) {
+	$sql .= ${$c} . ', ';
+	push(@{$map}, 'SCALAR');
+      } else {
+	$sql .= '?, ';
+	push(@{$map}, 'VALUE');
+      }
+    }
+  } else {
+    foreach my $k ( keys(%{$values}) ) {
+      if ( ref($values->{$k}) ) {
+	$sql .= ${$values->{$k}} . ', ';
+	push(@{$map}, 'SCALAR');
+      } else {
+	$sql .= '?, ';
+	push(@{$map}, 'VALUE');
+      }
+    }
+  }
+  $sql =~ s/, $/ \)/;
+  return $sql;
+}
 
 sub _columns {
   my ( $columns, $sql, $tab ) = @_;
@@ -1061,7 +1122,7 @@ sub _clause {
         ${$sql} .= $w . ( ( ${$where->{$w}} =~ /\s/ ) ? ' ' : ' = ' ) . ${$where->{$w}} . ' AND ';
 	push(@{$map}, 'SCALAR');
       } else {
-	if ( $where->{$w} =~ /\./ ) {
+	if ( defined($where->{$w}) && $where->{$w} =~ /\./ ) {
 	  ${$sql} .= "$w = $where->{$w} AND ";
 	  push(@{$map}, 'SCALAR');
 	} else {
@@ -1119,10 +1180,18 @@ sub _value {
     } sort(keys(%{$value}));
   } elsif ( ref($value) eq 'ARRAY' ) {
     # map stays the same, but $c is simply a reference to the current entry within the map
-    return map { 
-      my @temp = &_value($_, $map, $c); 
-      @temp;
-    } @{$value};
+    if ( ref($value->[0]) ne 'SCALAR' ) {
+      return map { 
+        my @temp = &_value($_, $map, $c); 
+        @temp;
+      } @{$value};
+    } else {
+      # insert is being called (with a scalar)
+      return grep {
+        ${$c}++;
+	$_ if ( $map->[${$c}] eq 'VALUE' );
+      } @{$value};
+    }
   } 
 }
 
@@ -1149,6 +1218,11 @@ sub setreturn {
 sub setdebug {
   my $class = shift;
   $DEBUGSQL = shift;
+}
+
+sub returnsth {
+  my $class = shift;
+  $RETURNSTH = shift;
 }
 
 #################################################################################
@@ -1222,7 +1296,6 @@ Sql::Simple by Ryan Alan Dietrich <ryan@dietrich.net>
 
 Contributions (thanks!) from the following.
 
-Mark Stosberg
-Miguel Manso
+Mark Stosberg, Miguel Manso, Tiago Almeida
 
 =cut
