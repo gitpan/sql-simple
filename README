@@ -1,6 +1,6 @@
 Sql::Simple - yet another SQL abstraction layer
 
-Version: 0.01
+Version: 0.03
 
 WHAT IS IT
 
@@ -45,12 +45,9 @@ PROBLEMS/BUG REPORTS
 
 Send all issues found to ryan[at]dietrich.net
 
-SEE ALSO
-
-The Artistic LIcense: http://language.perl.com/misc/Artistic.html
-
 THANKS
 
 Kevin Moffatt & Chuck McLean (putting up with me so I could write this [and a lot of good ideas])
+Garth Webb (for giving me such excellent constructive criticism)
 Paul Lindner (the drop of encouragement to release this)
 Randy Ray (used his module as a template for building this thing..)

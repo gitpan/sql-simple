@@ -160,14 +160,14 @@ B<If you do not set this, this module will expect the first argument to each fun
 
 package Sql::Simple;
 use vars qw($version $DBH $RETURNSQL @EXPORT @EXPORT_OK $DEBUGSQL);
-$VERSION = "0.02";
+$VERSION = "0.03";
 use strict;
 use Data::Dumper;
 use Carp qw(cluck croak);
 
 use Exporter;
-@EXPORT = qw($DBH, $RETURNSQL, $DEBUGSQL);
-@EXPORT_OK = qw($DBH, $RETURNSQL, $DEBUGSQL);
+@EXPORT = qw($DBH $RETURNSQL $DEBUGSQL);
+@EXPORT_OK = qw($DBH $RETURNSQL $DEBUGSQL);
 
 =head1 Sql::Simple->delete
 
@@ -1135,6 +1135,34 @@ Paul Lindner, Garth Webb, Kevin Moffatt, Chuck McLean, Intelligent Software Solu
 
  DBI (manpage)
  Sql::* (lots of similar modules to this)
+
+Specifically, take a look at DBIx::Abstract and Sql::Abstract.  I was rather astonished when I released this module today to find out there was another module that had such similar capabilities.  Great minds must think alike ;-).  After reviewing the modules, I can say that DBIx::Abstract and Sql::Simple have very little in common, but it does fill a niche that Sql::Simple does not.  Sql::Abstract however, does have nearly identical syntax on a few of the method calls, and has support for some of the features that I tout in Sql::Simple. (I'm not apologizing for writing this module, I like what it has done for me, 
+
+I'm not going to write a bullet background paper iterating over every feature this module has and doesn't have in comparison but I will cover the major differences.
+
+=item ANSI SQL 92 join support
+
+This feature, combined with the fact that the "clause" for the join is directly tied to the same code that generates a where clause is probably the biggest difference.  This feature is available in all aspects of Sql::Simple, not just the query method (as any sub query made in insert, update, or delete simply recursively call the query method to build it's data set).  
+
+=item Execution
+
+Sql::Abstract right now is better suited for a web environment where you would want to write your own custom handlers to handle errors.  Once an OO interface is added to Sql::Simple, that may be reason enough to switch.  Right now, Sql::Simple is capable of returning the completed Sql statement back to the user, not really all that different from Sql::Abstract.. ie:
+
+  $Sql::Simple::RETURNSQL = 1;
+  my $sth = $dbh->prepare(Sql::Simple->query('id', 'fruit', { 'name' => 'apple' }));
+
+Similar to.
+
+  my $sql = SQL::Abstract->new;
+  my ( $sth, @bind ) = $sql->select('fruit', ['id'], { 'name' => 'apple' });
+
+=item Mass Execution
+
+The main reason I wrote this module was to simplify the "I need to insert 10,000 records, but not use BCP, because I need it to hit the rules etc.".  With that said, the ability to pass in an array ref of hash refs into the insert routine, is fairly nice (or an array ref of columns, and an arrayref of arrayrefs of values).  Or be able to mass update quickly.  
+
+=item Summary
+
+Umm, TMTOWTDI, or whatever.  Use what suits you, the only real personal preference issue I have is that the variables are out of order in Sql::Abstract.  I'd rather see it line up with an actual SQL query.  IE: select COLUMNS from TABLE where CLAUSE, instead of TABLE, COLUMNS, WHERE
 
 =head1 COPYRIGHT:
 
