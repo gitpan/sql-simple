@@ -190,7 +190,7 @@ B<If you do not set this, this module will expect the first argument to each fun
 
 package Sql::Simple;
 use vars qw($version $DBH $RETURNSQL @EXPORT @EXPORT_OK $DEBUGSQL $RETURNSTH);
-$VERSION = "0.05";
+$VERSION = "0.06";
 use strict;
 use Data::Dumper;
 use Carp qw(cluck croak);
@@ -968,7 +968,7 @@ sub _insert {
       }
     }
   } else {
-    foreach my $k ( keys(%{$values}) ) {
+    foreach my $k ( sort(keys(%{$values})) ) {
       if ( ref($values->{$k}) ) {
 	$sql .= ${$values->{$k}} . ', ';
 	push(@{$map}, 'SCALAR');
@@ -1122,7 +1122,7 @@ sub _clause {
         ${$sql} .= $w . ( ( ${$where->{$w}} =~ /\s/ ) ? ' ' : ' = ' ) . ${$where->{$w}} . ' AND ';
 	push(@{$map}, 'SCALAR');
       } else {
-	if ( defined($where->{$w}) && $where->{$w} =~ /\./ ) {
+	if ( defined($where->{$w}) && $w =~ /\./ ) {
 	  ${$sql} .= "$w = $where->{$w} AND ";
 	  push(@{$map}, 'SCALAR');
 	} else {

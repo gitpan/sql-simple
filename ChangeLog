@@ -3,3 +3,5 @@
 0.03 (modified documentation, cleaned up minor non-fatal syntax)
 0.04 (added between, fixed query execution logic, adjusted documentation for logical operators)
 0.05 (insert now allows function calls as values, generic cleanup)
+0.06 (error in sort, resulted in failing tests, and an error in clause
+routine)
