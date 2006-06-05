@@ -29,7 +29,7 @@ my $valid = [
   'SELECT randomtable.column1, randomtable.column2 FROM randomtable ',
   'SELECT randomtable.COLUMN1 as column1, randomtable.COLUMN2 as column2 FROM randomtable ',
   'SELECT randomtable.column1, randomtable.column2 FROM randomtable WHERE column1 IS NULL ',
-  'SELECT randomtable.column1, randomtable.column2 FROM randomtable WHERE column1 LIKE ? ',
+  'SELECT randomtable.column1, randomtable.column2 FROM randomtable WHERE column1 LIKE ?  ',
   'SELECT randomtable.column1, randomtable.column2 FROM randomtable WHERE column1 = ? ',
   "SELECT randomtable.column1, randomtable.column2 FROM randomtable WHERE ( column1 = ? ) OR\n( column2 = ? ) ",
   "SELECT randomtable.column1, randomtable.column2 FROM randomtable WHERE column1 in ( SELECT column3 FROM othertable WHERE column4 = ?  ) ",
@@ -38,7 +38,7 @@ my $valid = [
 
   'SELECT 5 + 5 as column2, column1 FROM randomtable
 INNER JOIN othertable ON randomtable.column1 = othertable.column3 
-INNER JOIN othertable ON randomtable.column2 = othertable.column4 WHERE ( column10 LIKE ? AND column11 = ? AND column9 IS NULL ) OR
+INNER JOIN othertable ON randomtable.column2 = othertable.column4 WHERE ( column10 LIKE ?  AND column11 = ? AND column9 IS NULL ) OR
 ( column12 in ( SELECT columna FROM anothertable WHERE columnb = ?  ) ) OR
 ( column13 in (?,?) ) ',
 
@@ -131,7 +131,7 @@ my $test_hash = [
     'columns' => { 'mytable' => [qw(one two three)], 'othertable' => [qw(one two three)] },
     'table' => [ qw(mytable othertable) ],
     'where' => {
-      'mytable.pk' => 'othertable.sk'
+      'mytable.pk' => \'othertable.sk'
     },
   }
 ];
@@ -143,14 +143,18 @@ foreach my $c ( 0..$#{$valid} ) {
       ok(1);
     } else {
       warn "list is ok, hash is broke";
+      print Dumper(Sql::Simple->query(undef, @{$test_list->[$c]})) . "\n";
+      print Dumper(Sql::Simple->query(undef, %{$test_hash->[$c]})) . "\n";
+      print Dumper($valid->[$c]) . "\n";
+      die();
       ok(0);
     }
   } else {
     #open(FILE, ">FOO");
     #print "\n";
-    #print FILE Dumper(Sql::Simple->query(undef, @{$test_list->[$c]})) . "\n";
-    #print FILE Dumper(Sql::Simple->query(undef, %{$test_hash->[$c]})) . "\n";
-    #print FILE Dumper($valid->[$c]) . "\n";
+    #print Dumper(Sql::Simple->query(undef, @{$test_list->[$c]})) . "\n";
+    #print Dumper(Sql::Simple->query(undef, %{$test_hash->[$c]})) . "\n";
+    #print Dumper($valid->[$c]) . "\n";
     #die();
     #close FILE;
     #die();

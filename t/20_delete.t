@@ -17,7 +17,7 @@ BEGIN { plan tests => 3 }
 my $valid = [
   "DELETE FROM randomtable WHERE\ncolumn1 = ? AND column2 = ? ",
   "DELETE FROM randomtable WHERE\ncolumn1 = ? AND column2 = ? ",
-  "DELETE FROM randomtable WHERE\n( columna in (?,?,?,?,?,?,?,?) AND columnb in ( SELECT othertable.o FROM othertable WHERE columno = ?  ) ) OR\n( columnc = ? AND columnd like ? ) "
+  "DELETE FROM randomtable WHERE\n( columna in (?,?,?,?,?,?,?,?) AND columnb in ( SELECT othertable.o FROM othertable WHERE columno = ?  ) ) OR\n( columnc = ? AND columnd like ?  ) "
 
 ];
 
@@ -113,8 +113,17 @@ foreach my $c ( 0..2 ) {
        Sql::Simple->delete(%{$test_hash->[$c]}) eq $valid->[$c] ) {
     ok(1);
   } else {
-    #print Sql::Simple->delete(undef, @{$test_list->[$c]}) . "\n";
-    #print Sql::Simple->delete(undef, %{$test_hash->[$c]})    . "\n";
+    my $q1 = Sql::Simple->delete( @{$test_list->[$c]});
+    my $q2 = Sql::Simple->delete( %{$test_hash->[$c]});
+
+    if ( $q1 eq $q2 ) {
+      print "equals\n";
+    } else {
+      print "NOT equals\n";
+    }
+
+    #print "|" . Sql::Simple->delete( @{$test_list->[$c]}) . "|\n";
+    #print "|" . Sql::Simple->delete( %{$test_hash->[$c]}) . "|\n";
     #print $valid->[0] . "\n";
     ok(0);
   }

@@ -100,7 +100,6 @@ I figure explaining it once will make update, delete, and query a bit easier to 
     }
   ]
       
-
 This statment will generate the following clause. (or close to it, as the formatting might be off)
 
  (
@@ -163,6 +162,19 @@ To do a "between" query simply execute the follwing.
      } 
   } );
 
+UPDATE (0.7): If you wanted to generate a clause that allowed a value, or a couple of values, OR allow null, you can now "allowNull"
+
+  'price' => { 
+    'op' => 'between', 
+    'val' => 10,
+    'val2' => 20
+    'allowNull' => 'true' # anything boolean true will work here
+   } 
+
+   # This generates...
+
+   ( price between ? AND ?  OR price is null )
+
 =head1 Variables
 
 $DBH - (the database handle to use) You can modify this directly, or for your convenience you may call this helper method
@@ -189,15 +201,15 @@ B<If you do not set this, this module will expect the first argument to each fun
 =cut
 
 package Sql::Simple;
-use vars qw($version $DBH $RETURNSQL @EXPORT @EXPORT_OK $DEBUGSQL $RETURNSTH);
-$VERSION = "0.06";
+use vars qw($version $DBH $RETURNSQL @EXPORT @EXPORT_OK $DEBUGSQL $RETURNSTH $ASARRAY);
+$VERSION = "0.07";
 use strict;
 use Data::Dumper;
 use Carp qw(cluck croak);
 
 use Exporter;
-@EXPORT = qw($DBH $RETURNSQL $DEBUGSQL $RETURNSTH);
-@EXPORT_OK = qw($DBH $RETURNSQL $DEBUGSQL $RETURNSTH);
+@EXPORT = qw($DBH $RETURNSQL $DEBUGSQL $RETURNSTH $ASARRAY);
+@EXPORT_OK = qw($DBH $RETURNSQL $DEBUGSQL $RETURNSTH $ASARRAY);
 
 =head1 Sql::Simple->delete
 
@@ -530,6 +542,10 @@ Lastly, a hash, but using a subquery
     }
   );
 
+UPDATE 0.7: If you want to call a sql function, simply pass a scalar reference as a value for a column. (Example, to execute the "now()" function for a date..
+
+  Sql::Simple->insert( $dbh, 'myTable', { 'columnA' => \'valueB' } );
+
 =cut
 
 sub insert {
@@ -584,6 +600,7 @@ sub insert {
     } else {
       # not simple if there are any values that are scalar references.. 
       $simpleCheck = grep { 1 if ( ref($_) && ref($_) ne 'ARRAY' ) } @{$values};
+
       if ( $simpleCheck ) {
         $sql .= &_insert($values, $map);
       } else {
@@ -785,20 +802,50 @@ Complicated Table joins are only mildly more difficult (thanks to the standardiz
     ]
   );  
 
-Ambiguity within table joins must be handled .. well, somewhat on your own.  YMMV depending on your approach.  This module B<doesn't> have your schema, so it's hard to figure out relationships. (next version might support something wacky like this)
+Ambiguity within table joins must be handled .. well, somewhat on your own.  YMMV depending on your approach.  This module B<doesn't> have your schema, so it's hard to figure out relationships. (next version might support something wacky like this).  If you do not use a table prefix in your join, Sql::Simple will interpret it as a bind variable.  The only way to get around this is by using a scalar reference. (example below)
 
-Note to self: need mention the return structure modifiers (for fetchall_hashref vs. fetchrow_hashref), and order clause
+  [
+    'produce',
+    {
+      'table' => 'shelf_life',
+      'on' => {
+        'produce_id' => 'sl_produce_id'
+      }
+    }
+  ]
+  # generates " FROM produce INNER JOIN shelf_life on produce_id = ? " 
+  # intead of...
+  #	      " FROM produce INNER JOIN shelf_life on produce_id = sl_produce_id "
+
+Simple enough to get around..
+
+  [
+    'produce',
+    {
+      'table' => 'shelf_life',
+      'on' => {
+        'produce_id' => \'sl_produce_id'
+      }
+    }
+  ]
+  # generates " FROM produce INNER JOIN shelf_life on produce_id = sl_produce_id "
+
+=item Return structure Format
+
+UPDATE 0.7:  You can specify the type of structure you want returned from a query.  The default is an array of hashref's, keyed by the column names.  (that you may have chosen with aliases).  You can get an array of arrays by calling the static method "asarray" and passing it a true or a false value.  If you want the result set executed with using "fetchall_hashref()"  simply pass the column you want after the where clause.  Eventually, I'll probably move these other fetch styles as static methods like "asarray".  
 
 =cut
 
 sub query {
   my $class = shift;
-  my ( $columns, $table, $where, $col, $return, $order, $dbh );
+  my ( $columns, $table, $where, $col, $return, $order, $distinct, $dbh );
 
   shift unless ( $_[0] );
 
   if ( ref($_[0]) eq 'DBI::db' ) {
     $dbh = shift;
+  } elsif ( ref($class) && ref($class->{'dbh'}) ) {
+    $dbh = $class->{'dbh'};
   } else {
     $dbh = $DBH;
   }
@@ -812,29 +859,37 @@ sub query {
     $col     = $temp{'col'};
     $return  = $temp{'return'};
     $order   = $temp{'order'};
+    $distinct= $temp{'distinct'};
   } else {
-    ( $columns, $table, $where, $col, $return, $order ) = @_;
+    # some day I need to make the last argument after "WHERE" just be a hash of extra options
+    ( $columns, $table, $where, $col, $return, $order, $distinct ) = @_;
   }
   $return = 0 unless ( defined($return) );
 
   croak("No database handle given!") if ( ! $RETURNSQL && ! ref($dbh) && ! $return );
 
   my $sql = "SELECT ";
+  if ( $distinct ) {
+    $sql .= "distinct ";
+  }
   my $map = [];
+  my $tables = {};
 
   if ( ref($table) eq 'ARRAY' ) {
     &_columns($columns, \$sql);
-    &_from($table, \$sql, $map);
+    &_from($table, \$sql, $map, $tables);
   } elsif ( ref($table) eq 'HASH' ) {
     # only allow a single key pair
     die("Do not attempt to use a hash for more than one table join.") if ( scalar(keys(%{$table})) > 1 );
     my $ft = join('', keys(%{$table}));
     die("No complex joins in simple hash queries") if ( ref($table->{$ft}) );
     &_columns($columns, \$sql);
-    $sql .= "FROM " . substr($ft, 0, index($ft, '.')) . " INNER JOIN " . substr($table->{$ft}, 0, index($table->{$ft}, '.')) . " ON $ft = $table->{$ft}";
-  } else {
+    $sql .= "FROM " . substr($ft, 0, index($ft, '.')) . " INNER JOIN " . substr($table->{$ft}, 0, index($table->{$ft}, '.')) . " ON $ft = $table->{$ft} ";
+  } elsif ( $table ) {
     &_columns($columns, \$sql, $table);
     $sql .= "FROM $table ";
+  } else {
+    &_columns($columns, \$sql, $table);
   }
 
   # DAMN IT.. fix the code so it doesn't add a prefix onto columns that have parens
@@ -844,6 +899,12 @@ sub query {
     return ( $sql ) if ( $return || $RETURNSQL );
     my $sth = $dbh->prepare($sql);
     $sth->execute();
+
+    # save the statement handle and return it (if in an object, and state is on)
+    if ( ref($class) && $class->{'state'} ) {
+      $class->{'sth'} = $sth;
+      return $sth;
+    }
 
     if ( $col && ! ref($col) ) {
       my $res = $sth->fetchall_hashref($col);
@@ -882,17 +943,49 @@ sub query {
   my $simple = 0;
   $simple++ if ( $sql =~ /OR\n/ );
   map { $simple++ if ( $_ ne 'VALUE' ) } @{$map};
-  if ( $simple == 0 ) {
-    eval {
-      $sth->execute( map { $where->{$_} } sort(keys(%{$where})) );
-    };
+
+  # if there is a join clause
+  if ( scalar(keys(%{$tables})) > 0 ) {
+
+    # peel off the first table, since it is just a scalar
+    my $t = shift(@{$table});
+    my $d = -1;
+    my $c = \$d;
+    $sth->execute( 
+      map { 
+	if ( $_->{'on'} ) {
+	  &_value($_->{'on'}, $map, $c);
+	} elsif ( $_ ) {
+	  &_value($_, $map, $c);
+	}
+      } ( @{$table}, $where )
+    );
+    unshift(@{$table}, $t);
   } else {
-    eval {
-      $sth->execute( (&_value($where, $map)) );
-    };
+    if ( $simple == 0 ) {
+      # if it's simple.. then key off the where hash
+      eval {
+	$sth->execute( map { $where->{$_} } sort(keys(%{$where})) );
+      };
+    } elsif ( ! $where ) {
+      # if there is no where clause (which seems to happen in every test script I write, just execute it flat)
+      eval {
+	$sth->execute();
+      };
+    } else {
+      eval {
+	$sth->execute( (&_value($where, $map)) );
+      };
+    }
+    if ( $@ ) {
+      die(cluck() . "\n" . $@);
+    }
   }
-  if ( $@ ) {
-    die(cluck() . "\n" . $@);
+
+  # save the statement handle and return it (if in an object, and state is on)
+  if ( ref($class) && $class->{'state'} ) {
+    $class->{'sth'} = $sth;
+    return $sth;
   }
 
   # if there is a column defined for a fetchall
@@ -918,25 +1011,43 @@ sub execute {
 
   if ( ref($_[0]) eq 'DBI::db' ) {
     $dbh = shift;
+  } elsif ( ref($class) && ref($class->{'dbh'}) ) {
+    $dbh = $class->{'dbh'};
   } else {
     $dbh = $DBH;
   }
   my ( $sql, $struct, $col ) = @_;
 
+  warn $sql if ( $DEBUGSQL );
+
   my $sth = $dbh->prepare($sql);
-  if ( $sql =~ /select/i ) {
-    $sth->execute(@{$struct});
-    if ( $col ) {
-      my $result = $sth->fetchall_hashref($col);
-      $sth->finish();
-      return($result);
+  if ( $sql =~ /^[\s\n]*select/i ) {
+    if ( $struct ) {
+      # ok, here we need to scan the structure and see if we need to do bindparams
+      $sth->execute(@{$struct});
     } else {
-      my @outbound;
-      while ( my $row = $sth->fetchrow_hashref() ) {
-	push(@outbound, $row);
+      $sth->execute();
+    }
+    if ( ref($class) ) {
+      $class->{'sth'} = $sth;
+      return $sth;
+    } else {
+      if ( $ASARRAY ) {
+        my $result = $sth->fetchall_arrayref();
+        $sth->finish();
+        return($result);
+      } elsif ( $col ) {
+	my $result = $sth->fetchall_hashref($col);
+	$sth->finish();
+	return($result);
+      } else {
+	my @outbound;
+	while ( my $row = $sth->fetchrow_hashref() ) {
+	  push(@outbound, $row);
+	}
+	$sth->finish();
+	return(\@outbound);
       }
-      $sth->finish();
-      return(\@outbound);
     }
   } else {
     if ( ref($struct->[0]) eq 'ARRAY' ) {
@@ -950,6 +1061,58 @@ sub execute {
   $sth->finish();
 }
 
+sub execute_procedure {
+  my $class = shift;
+  my ( $dbh, $sql );
+
+  if ( ref($_[0]) eq 'DBI::db' ) {
+    $dbh = shift;
+  } elsif ( ref($class) && ref($class->{'dbh'}) ) {
+    $dbh = $class->{'dbh'};
+  } else {
+    $dbh = $DBH;
+  }
+  my ( $procedure, $arguments, $types, $col ) = @_;
+
+  $sql = $procedure;
+  # generate the sql statement (for the procedure, hmm. not going to go down the bound parameter road)
+  if ( ref($arguments) eq 'ARRAY' && scalar(@{$arguments}) > 0 ) {
+
+    foreach my $a ( 0..$#{$arguments} ) {
+      if ( defined($arguments->[$a]) && $types->{$a} eq 'number' ) { # they said it's a number
+        $sql .= ' ' . $arguments->[$a] . ",";
+      } elsif ( defined($arguments->[$a]) && $types->{$a} eq 'string' ) { # they said it's a string
+        $sql .= " '" . $arguments->[$a] . "',";
+      } elsif ( $arguments->[$a] =~ /^\-?\d+\.?\d*$/ ) { # it looks like a number
+        $sql .= ' ' . $arguments->[$a] . ",";
+      } elsif ( defined($arguments->[$a]) ) { # it's a string, quote it
+        $sql .= " '" . $arguments->[$a] . "',";
+      } elsif ( ! defined($arguments->[$a]) ) { # it's null
+        $sql .= " NULL,";
+      }
+    }
+    $sql =~ s/\,$//;
+  }
+  
+  warn $sql if ( $DEBUGSQL );
+  return $sql if ( $RETURNSQL );
+  #warn $sql;
+  my $sth = $dbh->prepare($sql);
+  $sth->execute();
+  if ( $col ) {
+    my $result = $sth->fetchall_hashref($col);
+    $sth->finish();
+    return($result);
+  } else {
+    my @outbound;
+    while ( my $row = $sth->fetchrow_hashref() ) {
+      push(@outbound, $row);
+    }
+    $sth->finish();
+    return(\@outbound);
+  }
+}
+
 #######################################################################
 # internal functions
 
@@ -960,7 +1123,7 @@ sub _insert {
   if ( ref($values) eq 'ARRAY' ) {
     foreach my $c ( @{$values} ) {
       if ( ref($c) ) {
-	$sql .= ${$c} . ', ';
+        $sql .= ${$c} . ", "; #$sql .= "'" . ${$c} . "', "; # by placing quotes around the escaped data, we don't provide support functions (maybe provide support for quoted strings as an "op"
 	push(@{$map}, 'SCALAR');
       } else {
 	$sql .= '?, ';
@@ -1031,28 +1194,29 @@ sub _columns {
 
 # this will iterate through all the tables
 sub _from {
-  my ( $struct, $sql, $map ) = @_;
+  my ( $struct, $sql, $map, $tables ) = @_;
 
   ${$sql} .= "FROM " . $struct->[0];
+  $tables->{$struct->[0]} = 1;
 
   foreach my $s ( @{$struct} ) {
     if ( ref($s) eq 'HASH' ) {
       # get the table and the join type into the statement
       ${$sql} .= "\n" . ( ( $s->{'join'} ) ? uc($s->{'join'}) . ' JOIN ' : 'INNER JOIN ' ) . "$s->{'table'} ON ";
 
+      # push the table into the table hash
+      $tables->{$s->{'table'}} = 1;
+
       if ( ref($s->{'on'}) eq 'HASH' ) {
 	# loop over all the relationships
-	&_clause($sql, $s->{'on'}, $map, 1);
+	&_clause($sql, $s->{'on'}, $map, $tables);
       } elsif ( ref($s->{'on'}) eq 'ARRAY' ) {
 	foreach my $a ( @{$s->{'on'}} ) {
-	  &_clause($sql, $a, $map, 1);
+	  &_clause($sql, $a, $map, $tables);
 	}
       }
     } else {
-      if ( $s ne $struct->[0] ) {
-	#${$sql} .= $s . ", ";
-	${$sql} .= ',' . $s . ' ';
-      }
+      ${$sql} .= ',' . $s . ' ' if ( $s ne $struct->[0] );
     }
   }
 }
@@ -1099,20 +1263,31 @@ sub _clause {
 	# then tie it back into the current structure
 	push(@{$map}, $tmp_map);
       } else {
+
+        if ( $where->{$w}{'allowNull'} ) {
+          ${$sql} .= " ( ";
+        }
+
+        # if the value is an array
 	if ( ref($where->{$w}{'val'}) eq 'ARRAY' ) {
-	  ${$sql} .= $w . $where->{$w}{'op'} . ' ( ' . join(',', ('?') x scalar(@{$where->{$w}{'val'}}) ) . ' ) AND ';
-	  push(@{$map}, 'VAL');
+	  ${$sql} .= $w . ' ' . $where->{$w}{'op'} . ' ( ' . join(',', ('?') x scalar(@{$where->{$w}{'val'}}) ) . ' ) ';
+	  push(@{$map}, 'HASH-ARRAY' );
         } elsif ( ref($where->{$w}{'val'}) eq 'SCALAR') { 
 	  # bloody hack.. I need to be able to throw an = sign if there is whitespace ie: IS NULL (vs. a scalar ref table join)
-	  ${$sql} .= $w . ( ( ${$where->{$w}} =~ /\s/ ) ? ' ' : ' = ' ) . ${$where->{$w}} . ' AND ';
+	  ${$sql} .= $w . ( ( ${$where->{$w}} =~ /\s/ ) ? ' ' : ' = ' ) . ${$where->{$w}};
 	  push(@{$map}, 'SCALAR');
 	} elsif ( defined($where->{$w}{'val2'}) ) {
-	  ${$sql} .= $w . ' ' . $where->{$w}{'op'} . ' ? AND ? AND ';
+	  ${$sql} .= $w . ' ' . $where->{$w}{'op'} . ' ? AND ? ';
 	  push(@{$map}, 'VAL2');
 	} else {
-	  ${$sql} .= $w . ' ' . $where->{$w}{'op'} . ' ? AND ';
+	  ${$sql} .= $w . ' ' . $where->{$w}{'op'} . ' ? ';
 	  push(@{$map}, 'VAL');
 	}
+
+        if ( $where->{$w}{'allowNull'} ) {
+          ${$sql} .= " OR $w is null ) ";
+        }
+        ${$sql} .= " AND ";
       }
     } else {
       if ( ref($where->{$w}) eq 'ARRAY' ) {
@@ -1122,7 +1297,9 @@ sub _clause {
         ${$sql} .= $w . ( ( ${$where->{$w}} =~ /\s/ ) ? ' ' : ' = ' ) . ${$where->{$w}} . ' AND ';
 	push(@{$map}, 'SCALAR');
       } else {
-	if ( defined($where->{$w}) && $w =~ /\./ ) {
+	# from clause construct.  sort of a hack.  if we are in a from clause, and the from clause has a prefix 
+	# (with a dot as a seperator) as a table name, then we're dealing with a table join
+	if ( $from && $from->{substr($w, 0, index($w, '.'))} && $from->{substr($where->{$w}, 0, index($where->{$w}, '.'))} ) {
 	  ${$sql} .= "$w = $where->{$w} AND ";
 	  push(@{$map}, 'SCALAR');
 	} else {
@@ -1169,6 +1346,9 @@ sub _value {
 	( $value->{$_}{'val'}, $value->{$_}{'val2'} );
       } elsif ( $map->[${$c}] eq 'VAL' ) {
 	$value->{$_}{'val'};
+      } elsif ( $map->[${$c}] eq 'HASH-ARRAY' ) {
+        @{$value->{$_}{'val'}};
+
       } elsif ( $map->[${$c}] eq 'SCALAR' ) {
 	# do nothing ...
       } elsif ( ref($map->[${$c}]) ) {
@@ -1210,7 +1390,13 @@ sub getdbh {
 
 ####
 # easier "set" for RETURNSQL
+
 sub setreturn {
+  my $class = shift;
+  $RETURNSQL = shift;
+}
+
+sub setReturn {
   my $class = shift;
   $RETURNSQL = shift;
 }
@@ -1220,22 +1406,87 @@ sub setdebug {
   $DEBUGSQL = shift;
 }
 
+sub setDebug {
+  my $class = shift;
+  $DEBUGSQL = shift;
+}
+
 sub returnsth {
   my $class = shift;
   $RETURNSTH = shift;
+}
+
+sub asarray {
+  my $class = shift;
+  $ASARRAY = shift;
+}
+
+sub asArray {
+  my $class = shift;
+  $ASARRAY = shift;
 }
 
 #################################################################################
 # object code
 
 sub new {
-  my ( $class ) = @_;
+  my ( $class, $dbh, $state ) = @_;
 
-  my $this = {};
-  return bless($this);
+  return bless( { 'dbh' => $dbh, 'state' => $state || 1 } );
 }
 
-1;
+=head1 state
+
+The state function controls how the stateful subroutines act in a OO environment.  As class based functions, you are returned the entire result set as one large data structure.  With larger data sets, you may wish to iterate through them one at a time, to avoid massive memory consumption.  If this is set to "true", then any direct query will save the statement handle to the object.  You can call all of the various DBI routines from here, or simply call the other helper methods.
+
+Here is a quick example of how you would deal with Sql::Simple through the OO interface.
+
+  my $obj = new Sql::Simple( DBI->connect('dbi:ODBC:instance', 'username', 'password') );
+  my $result = $s->query(qw(name density), 'minerals')->fetchall_arrayref();
+
+  my $sth = $obj->query(qw(color taste durability), 'fruit');
+  while ( my @row = $sth->fetchrow() ) {
+    # do something...
+  }
+  $sth->finish();
+=cut
+
+=cut
+
+sub state {
+  my ( $self, $state ) = @_;
+  ( $state ) ? $self->{'state'} = $state : return $self->{'state'};
+}
+
+my @ofunctions = qw(column table where order);
+
+my @functions = qw(fetchall_arrayref fetchrow_arrayref fetchrow fetchall_hashref fetchrow_hashref fetchrow_array err rows bind_columns fetch dump_results);
+
+foreach my $field (@functions) {
+  my $sub = q {
+    sub [[field]] {
+      my $self = shift;
+      return $self->{'sth'}->[[field]]();
+    }
+  };
+
+  $sub =~ s/\[\[field\]\]/$field/g;
+  eval $sub;
+
+  if ($@) {
+    die $@;
+  }
+}
+
+sub sth {
+  my ( $self ) = @_;
+  return $self->{'sth'};
+}
+
+sub finish {
+  my ( $self ) = @_;
+  $self->{'sth'}->finish() and delete($self->{'sth'}) if ( ref($self) && ref($self->{'sth'}) );
+}
 
 =head1 BUGS:
 
@@ -1249,7 +1500,6 @@ Paul Lindner, Garth Webb, Kevin Moffatt, Chuck McLean, Intelligent Software Solu
 =head1 TODO:
 
  1. Figure out a good way of handling prefix's for columns.. (ugh)
- 2. object oriented interface
  2A. store pre-computed sql and map (in object or possibly global via mod_perl or serialized in mldbm or whatever)
  2B. Be able to pass in the precomputed information as arguments to functions.. (partially done, with the execute method)
 
@@ -1299,3 +1549,5 @@ Contributions (thanks!) from the following.
 Mark Stosberg, Miguel Manso, Tiago Almeida
 
 =cut
+
+1;
